@@ -40,7 +40,7 @@ android {
         debug { isMinifyEnabled = false }
     }
 
-    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.24.1" } }
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
     packaging { jniLibs { useLegacyPackaging = true } }
     buildFeatures { compose = true; buildConfig = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
