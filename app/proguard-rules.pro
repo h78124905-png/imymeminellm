@@ -1,0 +1,2 @@
+-keepclasseswithmembernames class com.example.agentllm.LlamaNative { native <methods>; }
+-keep class com.example.agentllm.LlamaNative { *; }
