@@ -1,0 +1,1 @@
+app/src/main/cpp/llama.cpp -> https://github.com/ggml-org/llama.cpp @ 5c0d18881e0e9794c96b2602736b758bac9d9388 (b7446)
