@@ -9,8 +9,13 @@ set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP ON CACHE BOOL "" FORCE)
 set(GGML_CPU_ARM_ARCH "armv8.6-a+i8mm+dotprod+fp16" CACHE STRING "" FORCE)
-set(GGML_CPU_KLEIDIAI ON CACHE BOOL "" FORCE)
 add_subdirectory(llama.cpp)
 add_library(agentllm SHARED jni_bridge.cpp)
-target_link_libraries(agentllm common llama ggml android log)
+target_link_libraries(agentllm
+    common
+    llama
+    ggml
+    android
+    log
+)
 target_include_directories(agentllm PRIVATE llama.cpp/common llama.cpp/include)
