@@ -6,6 +6,7 @@
 #include <sstream>
 #include <iomanip>
 #include "llama.h"
+#include "common.h"
 #include "chat.h"
 
 #define TAG "AgentLLM"
@@ -15,7 +16,7 @@
 static llama_model * g_model = nullptr;
 static llama_context * g_ctx = nullptr;
 static const llama_vocab * g_vocab = nullptr;
-static common_chat_templates_ptr g_templates;
+static common_chat_templates_ptr g_tmpls;
 
 static std::string jstr(JNIEnv * env, jstring s) {
     if (!s) return {};
@@ -57,15 +58,25 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_agentllm_LlamaNative_loadModel(JNIEnv * env, jobject, jstring path) {
     if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
+    g_tmpls.reset();
+    g_vocab = nullptr;
+
+    const std::string model_path = jstr(env, path);
     llama_model_params p = llama_model_default_params();
     p.n_gpu_layers = 0;
     p.use_mmap = true;
-    g_model = llama_model_load_from_file(jstr(env, path).c_str(), p);
+    g_model = llama_model_load_from_file(model_path.c_str(), p);
     if (!g_model) { LOGE("model load failed"); return JNI_FALSE; }
     g_vocab = llama_model_get_vocab(g_model);
-    g_templates = common_chat_templates_init(g_model, "");
-    LOGI("model loaded");
-    return g_templates ? JNI_TRUE : JNI_FALSE;
+    g_tmpls = common_chat_templates_init(g_model, "");
+    if (!g_tmpls) {
+        llama_model_free(g_model);
+        g_model = nullptr;
+        g_vocab = nullptr;
+        return JNI_FALSE;
+    }
+    LOGI("model loaded: %s", model_path.c_str());
+    return JNI_TRUE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -92,33 +103,35 @@ Java_com_example_agentllm_LlamaNative_resetContext(JNIEnv *, jobject) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_agentllm_LlamaNative_applyChatTemplate(JNIEnv * env, jobject, jstring messages, jstring tools) {
-    if (!g_templates) return out(env, "");
+    if (!g_tmpls) return out(env, "");
     common_chat_templates_inputs in;
     in.messages = common_chat_msgs_parse_oaicompat(jstr(env, messages));
-    std::string toolsJson = jstr(env, tools);
+    const std::string toolsJson = jstr(env, tools);
     if (!toolsJson.empty() && toolsJson != "[]") in.tools = common_chat_tools_parse_oaicompat(toolsJson);
     in.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
     in.add_generation_prompt = true;
     in.use_jinja = true;
     in.enable_thinking = false;
-    auto params = common_chat_templates_apply(g_templates.get(), in);
+    auto params = common_chat_templates_apply(g_tmpls.get(), in);
     return out(env, params.prompt);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring prompt, jint maxTokens) {
     if (!g_ctx || !g_vocab) return out(env, "");
-    std::string p = jstr(env, prompt);
+    const std::string p = jstr(env, prompt);
     int n = -llama_tokenize(g_vocab, p.c_str(), p.size(), nullptr, 0, true, true);
     if (n <= 0) return out(env, "");
     std::vector<llama_token> toks(n);
     if (llama_tokenize(g_vocab, p.c_str(), p.size(), toks.data(), toks.size(), true, true) < 0) return out(env, "");
+
     llama_sampler_chain_params sp = llama_sampler_chain_default_params();
     sp.no_perf = true;
     llama_sampler * sampler = llama_sampler_chain_init(sp);
     llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
     llama_batch batch = llama_batch_get_one(toks.data(), toks.size());
     std::string result;
+
     for (int i = 0; i < maxTokens; ++i) {
         if (llama_decode(g_ctx, batch) != 0) break;
         llama_token id = llama_sampler_sample(sampler, g_ctx, -1);
@@ -134,20 +147,25 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_agentllm_LlamaNative_parseToolCalls(JNIEnv * env, jobject, jstring generated) {
-    if (!g_templates) return out(env, "{\"content\":\"\",\"reasoning\":\"\",\"toolCalls\":[]}");
+    if (!g_tmpls) return out(env, "{\"content\":\"\",\"reasoning\":\"\",\"toolCalls\":[]}");
     common_chat_syntax syntax;
     syntax.parse_tool_calls = true;
     syntax.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
-    auto msg = common_chat_parse(jstr(env, generated), false, syntax);
-    std::ostringstream o;
-    o << "{\"content\":\"" << json_escape(msg.content) << "\",\"reasoning\":\"" << json_escape(msg.reasoning_content) << "\",\"toolCalls\":[";
-    for (size_t i = 0; i < msg.tool_calls.size(); ++i) {
-        if (i) o << ',';
-        const auto & c = msg.tool_calls[i];
-        o << "{\"id\":\"" << json_escape(c.id) << "\",\"name\":\"" << json_escape(c.name) << "\",\"arguments\":" << (c.arguments.empty() ? "{}" : c.arguments) << '}';
+    try {
+        auto msg = common_chat_parse(jstr(env, generated), false, syntax);
+        std::ostringstream o;
+        o << "{\"content\":\"" << json_escape(msg.content) << "\",\"reasoning\":\"" << json_escape(msg.reasoning_content) << "\",\"toolCalls\":[";
+        for (size_t i = 0; i < msg.tool_calls.size(); ++i) {
+            if (i) o << ',';
+            const auto & c = msg.tool_calls[i];
+            o << "{\"id\":\"" << json_escape(c.id) << "\",\"name\":\"" << json_escape(c.name) << "\",\"arguments\":" << (c.arguments.empty() ? "{}" : c.arguments) << '}';
+        }
+        o << "]}";
+        return out(env, o.str());
+    } catch (const std::exception & e) {
+        LOGE("tool call parse error: %s", e.what());
+        return out(env, "{\"content\":\"\",\"reasoning\":\"\",\"toolCalls\":[]}");
     }
-    o << "]}";
-    return out(env, o.str());
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -158,7 +176,7 @@ Java_com_example_agentllm_LlamaNative_freeContext(JNIEnv *, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_agentllm_LlamaNative_freeModel(JNIEnv *, jobject) {
     if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
-    g_templates.reset();
+    g_tmpls.reset();
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
     g_vocab = nullptr;
 }
