@@ -70,18 +70,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _reasoningText.value = ""
         _stage.value = "準備しています…"
         val streamed = StringBuilder()
+        val thinkOpen = "<think>"
+        val thinkClose = "</think>"
+        val toolOpen = "<|tool_call_start|>"
+
+        fun removePartialSuffix(value: String, marker: String): String {
+            val max = minOf(value.length, marker.length - 1)
+            for (length in max downTo 1) {
+                if (value.endsWith(marker.substring(0, length))) {
+                    return value.dropLast(length)
+                }
+            }
+            return value
+        }
 
         fun publishStream() {
             val raw = streamed.toString()
-            val thinkStart = raw.indexOf("<think>")
-            val thinkEnd = raw.indexOf("</think>")
+            val thinkStart = raw.indexOf(thinkOpen)
+            val thinkEnd = raw.indexOf(thinkClose)
             if (thinkStart >= 0 && thinkEnd > thinkStart) {
-                _reasoningText.value = raw.substring(thinkStart + 7, thinkEnd).trim()
-                val answerStart = thinkEnd + 8
-                val toolStart = raw.indexOf("<|tool_call_start|>", answerStart)
-                _streamingText.value = raw.substring(answerStart, if (toolStart >= 0) toolStart else raw.length).trim()
+                _reasoningText.value = raw.substring(thinkStart + thinkOpen.length, thinkEnd).trim()
+                val answerStart = thinkEnd + thinkClose.length
+                val toolStart = raw.indexOf(toolOpen, answerStart)
+                val answerEnd = if (toolStart >= 0) toolStart else raw.length
+                _streamingText.value = removePartialSuffix(raw.substring(answerStart, answerEnd), toolOpen).trim()
+            } else if (thinkStart >= 0) {
+                _reasoningText.value = raw.substring(thinkStart + thinkOpen.length).trim()
+                _streamingText.value = ""
+            } else if (thinkOpen.startsWith(raw)) {
+                _streamingText.value = ""
             } else if (thinkStart < 0) {
-                _streamingText.value = raw
+                _streamingText.value = removePartialSuffix(raw, thinkOpen).trim()
             }
         }
 
