@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <iomanip>
 #include "llama.h"
@@ -47,6 +48,54 @@ static std::string json_escape(const std::string & s) {
 }
 
 static jstring out(JNIEnv * env, const std::string & s) { return env->NewStringUTF(s.c_str()); }
+
+static std::string parse_lfm25_python_tool_calls(const std::string & generated) {
+    static const std::regex block_re(
+        R"(<\|tool_call_start\|>\s*\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*?)\)\s*\]\s*<\|tool_call_end\|>)",
+        std::regex::ECMAScript);
+    static const std::regex query_re(R"(query\s*=\s*(['"])(.*?)\1)", std::regex::ECMAScript);
+    static const std::regex urls_re(R"(urls\s*=\s*(\[.*\]))", std::regex::ECMAScript);
+    static const std::regex url_re(R"(['"]((?:\\.|[^'"])*)['"])", std::regex::ECMAScript);
+
+    std::ostringstream calls;
+    calls << '[';
+    bool first = true;
+    for (std::sregex_iterator it(generated.begin(), generated.end(), block_re), end; it != end; ++it) {
+        const std::string name = (*it)[1].str();
+        const std::string args = (*it)[2].str();
+        std::string arguments = "{}";
+
+        if (name == "tinyfish_search") {
+            std::smatch match;
+            if (!std::regex_search(args, match, query_re)) continue;
+            arguments = "{\"query\":\"" + json_escape(match[2].str()) + "\"}";
+        } else if (name == "tinyfish_fetch") {
+            std::smatch match;
+            if (!std::regex_search(args, match, urls_re)) continue;
+            std::ostringstream urls;
+            urls << '[';
+            bool first_url = true;
+            for (std::sregex_iterator url_it(match[1].first, match[1].second, url_re), url_end;
+                 url_it != url_end; ++url_it) {
+                if (!first_url) urls << ',';
+                urls << '"' << json_escape((*url_it)[1].str()) << '"';
+                first_url = false;
+            }
+            urls << ']';
+            arguments = "{\"urls\":" + urls.str() + "}";
+        } else {
+            continue;
+        }
+
+        if (!first) calls << ',';
+        calls << "{\"id\":\"call-" << calls.tellp()
+              << "\",\"name\":\"" << json_escape(name)
+              << "\",\"arguments\":" << arguments << '}';
+        first = false;
+    }
+    calls << ']';
+    return first ? std::string() : calls.str();
+}
 
 static size_t utf8_complete_prefix(const std::string & bytes) {
     size_t i = 0;
@@ -315,7 +364,20 @@ Java_com_example_agentllm_LlamaNative_parseToolCalls(JNIEnv * env, jobject, jstr
     syntax.parse_tool_calls = true;
     syntax.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     try {
-        auto msg = common_chat_parse(jstr(env, generated), false, syntax);
+        const std::string raw = jstr(env, generated);
+        const std::string fallback = parse_lfm25_python_tool_calls(raw);
+        if (!fallback.empty()) {
+            std::ostringstream fallback_json;
+            fallback_json << "{\"content\":\"\",\"reasoning\":\"\",\"toolCalls\":"
+                          << fallback << '}';
+            LOGI("Parsed LFM2.5 Python-style tool call");
+            return out(env, fallback_json.str());
+        }
+
+        auto msg = common_chat_parse(raw, false, syntax);
+        if (msg.tool_calls.empty()) {
+            LOGI("No tool call parsed from generated output");
+        }
         std::ostringstream o;
         o << "{\"content\":\"" << json_escape(msg.content) << "\",\"reasoning\":\"" << json_escape(msg.reasoning_content) << "\",\"toolCalls\":[";
         for (size_t i = 0; i < msg.tool_calls.size(); ++i) {
