@@ -22,6 +22,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val status: StateFlow<String> = _status
     private val _recent = MutableStateFlow(loadRecent())
     val recent: StateFlow<List<String>> = _recent
+    private val _streamingText = MutableStateFlow("")
+    val streamingText: StateFlow<String> = _streamingText
+    private val _reasoningText = MutableStateFlow("")
+    val reasoningText: StateFlow<String> = _reasoningText
+    private val _loading = MutableStateFlow(false)
+    val loading: StateFlow<Boolean> = _loading
 
     private fun loadRecent() = prefs.getStringSet("recent", emptySet())?.toList() ?: emptyList()
     private fun saveRecent(path: String) {
@@ -53,12 +59,31 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun send(text: String) = viewModelScope.launch {
-        if (text.isBlank() || agent == null) return@launch
+        if (text.isBlank() || agent == null || _loading.value) return@launch
         val before = _messages.value + ChatMessage("user", text)
-        _messages.value = before + ChatMessage("assistant", "…")
-        runCatching { agent!!.run(text) }
-            .onSuccess { answer -> _messages.value = before + ChatMessage("assistant", answer) }
-            .onFailure { e -> _messages.value = before + ChatMessage("assistant", "エラー: ${e.message}") }
+        _messages.value = before
+        _loading.value = true
+        _streamingText.value = ""
+        _reasoningText.value = ""
+        _status.value = "答えを考えています…"
+
+        runCatching {
+            agent!!.run(
+                userText = text,
+                onStage = { stage -> _status.value = stage },
+                onToken = { token -> _streamingText.value += token }
+            )
+        }.onSuccess { answer ->
+            _messages.value = before + answer
+            _reasoningText.value = answer.reasoning
+            _streamingText.value = ""
+        }.onFailure { e ->
+            _messages.value = before + ChatMessage("assistant", "エラー: ${e.message}")
+            _streamingText.value = ""
+            _reasoningText.value = ""
+        }
+        _loading.value = false
+        _status.value = "準備完了"
     }
 
     override fun onCleared() { engine.close(); super.onCleared() }
