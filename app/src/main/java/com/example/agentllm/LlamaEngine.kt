@@ -16,6 +16,10 @@ class LlamaEngine {
         loaded = true
     }
 
+    suspend fun reset() = withContext(Dispatchers.Default) {
+        LlamaNative.resetContext()
+    }
+
     suspend fun chat(
         messages: List<ChatMessage>,
         tools: JSONArray,
@@ -24,7 +28,6 @@ class LlamaEngine {
         onStage: (String) -> Unit = {}
     ): ChatMessage = withContext(Dispatchers.Default) {
         check(loaded) { "model is not loaded" }
-        LlamaNative.resetContext()
 
         val messageJson = JSONArray().apply {
             messages.forEach { m ->
@@ -62,6 +65,8 @@ class LlamaEngine {
                 onStage(stage)
             }
         }
+
+        LlamaNative.setThreads(0L, 8, 8)
         val raw = LlamaNative.generate(prompt, maxTokens, tokenCb, stageCb)
         val parsed = JSONObject(LlamaNative.parseToolCalls(raw))
         val calls = mutableListOf<ToolCall>()
