@@ -16,21 +16,32 @@ class LlamaEngine {
         loaded = true
     }
 
-    fun chat(messages: List<ChatMessage>, tools: JSONArray): Pair<String, List<ToolCall>> {
+    suspend fun chat(
+        messages: List<ChatMessage>,
+        tools: JSONArray,
+        maxTokens: Int = 512,
+        onToken: (String) -> Unit = {}
+    ): ChatMessage = withContext(Dispatchers.Default) {
         check(loaded) { "model is not loaded" }
         LlamaNative.resetContext()
+
         val messageJson = JSONArray().apply {
             messages.forEach { m ->
                 put(JSONObject().apply {
                     put("role", m.role)
                     put("content", m.content)
+                    if (m.reasoning.isNotEmpty()) put("reasoning_content", m.reasoning)
                     if (m.toolCallId != null) put("tool_call_id", m.toolCallId)
                     if (m.toolCalls.isNotEmpty()) {
                         put("tool_calls", JSONArray().apply {
                             m.toolCalls.forEach { c ->
                                 put(JSONObject().apply {
-                                    put("id", c.id); put("type", "function")
-                                    put("function", JSONObject().apply { put("name", c.name); put("arguments", c.arguments) })
+                                    put("id", c.id)
+                                    put("type", "function")
+                                    put("function", JSONObject().apply {
+                                        put("name", c.name)
+                                        put("arguments", c.arguments)
+                                    })
                                 })
                             }
                         })
@@ -38,17 +49,48 @@ class LlamaEngine {
                 })
             }
         }
+
         val prompt = LlamaNative.applyChatTemplate(messageJson.toString(), tools.toString())
-        val raw = LlamaNative.generate(prompt, 512)
+        val callback = object : LlamaNative.TokenCallback {
+            override fun onToken(token: ByteArray) {
+                onToken(String(token, Charsets.UTF_8))
+            }
+        }
+        val raw = LlamaNative.generate(prompt, maxTokens, callback)
         val parsed = JSONObject(LlamaNative.parseToolCalls(raw))
         val calls = mutableListOf<ToolCall>()
-        val arr = parsed.optJSONArray("toolCalls") ?: JSONArray()
+        val arr = parsed.optJSONArray("toolCalls") ?: parsed.optJSONArray("tool_calls") ?: JSONArray()
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
-            calls += ToolCall(o.optString("id", "call-$i"), o.getString("name"), o.optString("arguments", "{}"))
+            val fn = o.optJSONObject("function")
+            if (fn != null) {
+                calls += ToolCall(
+                    id = o.optString("id", "call-$i"),
+                    name = fn.getString("name"),
+                    arguments = fn.optString("arguments", "{}")
+                )
+            } else {
+                calls += ToolCall(
+                    id = o.optString("id", "call-$i"),
+                    name = o.getString("name"),
+                    arguments = o.optString("arguments", "{}")
+                )
+            }
         }
-        return parsed.optString("content") to calls
+
+        ChatMessage(
+            role = "assistant",
+            content = parsed.optString("content", ""),
+            reasoning = parsed.optString("reasoning", ""),
+            toolCalls = calls
+        )
     }
 
-    fun close() { if (loaded) { LlamaNative.freeContext(); LlamaNative.freeModel(); loaded = false } }
+    fun close() {
+        if (loaded) {
+            LlamaNative.freeContext()
+            LlamaNative.freeModel()
+            loaded = false
+        }
+    }
 }
