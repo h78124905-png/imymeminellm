@@ -38,6 +38,8 @@ private fun AgentApp(vm: ChatViewModel = viewModel()) {
                 Text(status, style = MaterialTheme.typography.labelMedium)
                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                     Button(onClick = { picker.launch(arrayOf("application/octet-stream", "*/*")) }) { Text("GGUFを選択") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = { vm.startNewConversation() }, enabled = !loading) { Text("新しい会話") }
                 }
                 if (recent.isNotEmpty()) Text("最近使ったモデル", style = MaterialTheme.typography.labelLarge)
                 recent.take(3).forEach { path ->
