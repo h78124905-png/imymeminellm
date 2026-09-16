@@ -46,7 +46,12 @@ class LlamaEngine {
                                         put("name", c.name)
                                         // LFM2.5's chat template requires a mapping,
                                         // not a JSON-encoded argument string.
-                                        put("arguments", JSONObject(c.arguments))
+                                        val parsedArguments = runCatching {
+                                            JSONObject(c.arguments)
+                                        }.getOrElse {
+                                            JSONObject()
+                                        }
+                                        put("arguments", parsedArguments)
                                     })
                                 })
                             }

@@ -64,11 +64,12 @@ class AgentLoop(private val engine: LlamaEngine, private val web: TinyFishClient
             for (call in response.toolCalls) {
                 if (searches >= 5) break
                 searches++
-                val args = JSONObject(call.arguments)
+                val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
                 val result = when (call.name) {
                     "tinyfish_search" -> {
                         onStage("ネットで調べています…")
-                        web.search(args.optString("query", "").ifBlank { "no query" })
+                        val query = args.optString("query", "").trim()
+                        if (query.isEmpty()) "ERROR: empty search query" else web.search(query)
                     }
                     "tinyfish_fetch" -> {
                         onStage("ページを読んでいます…")
