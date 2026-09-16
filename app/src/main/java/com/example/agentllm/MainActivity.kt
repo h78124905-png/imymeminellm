@@ -8,10 +8,9 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -27,6 +26,7 @@ private fun AgentApp(vm: ChatViewModel = viewModel()) {
     val recent by vm.recent.collectAsState()
     val streamingText by vm.streamingText.collectAsState()
     val reasoningText by vm.reasoningText.collectAsState()
+    val stage by vm.stage.collectAsState()
     val loading by vm.loading.collectAsState()
     var input by remember { mutableStateOf("") }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.onModelUri(uri) }
@@ -42,6 +42,24 @@ private fun AgentApp(vm: ChatViewModel = viewModel()) {
                 if (recent.isNotEmpty()) Text("最近使ったモデル", style = MaterialTheme.typography.labelLarge)
                 recent.take(3).forEach { path ->
                     OutlinedButton(onClick = { vm.loadModel(path) }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) { Text(path.substringAfterLast('/')) }
+                }
+                if (loading && stage.isNotBlank()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            stage,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 8.dp)) {
                     items(messages) { m ->
@@ -76,7 +94,7 @@ private fun AgentApp(vm: ChatViewModel = viewModel()) {
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = input,
                         onValueChange = { input = it },
