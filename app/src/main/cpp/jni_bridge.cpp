@@ -199,9 +199,9 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
     const size_t common = std::min(g_cached_tokens.size(), toks.size());
     while (n_match < common && g_cached_tokens[n_match] == toks[n_match]) ++n_match;
 
-    if (n_match < g_cached_tokens.size()) {
-        llama_memory_seq_rm(llama_get_memory(g_ctx), 0, (llama_pos)n_match, -1);
-    }
+    LOGI("KV rm from %zu (n_match=%zu, cached=%zu)",
+         n_match, n_match, g_cached_tokens.size());
+    llama_memory_seq_rm(llama_get_memory(g_ctx), 0, (llama_pos)n_match, -1);
 
     size_t decode_from = n_match;
     if (decode_from == toks.size() && !toks.empty()) {
