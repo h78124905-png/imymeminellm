@@ -17,6 +17,7 @@ static llama_model * g_model = nullptr;
 static llama_context * g_ctx = nullptr;
 static const llama_vocab * g_vocab = nullptr;
 static common_chat_templates_ptr g_tmpls;
+static std::vector<llama_token> g_cached_tokens;
 
 static std::string jstr(JNIEnv * env, jstring s) {
     if (!s) return {};
@@ -97,6 +98,7 @@ Java_com_example_agentllm_LlamaNative_loadModel(JNIEnv * env, jobject, jstring p
     if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
     g_tmpls.reset();
+    g_cached_tokens.clear();
     g_vocab = nullptr;
     const std::string model_path = jstr(env, path);
     llama_model_params p = llama_model_default_params();
@@ -117,6 +119,7 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_agentllm_LlamaNative_createContext(JNIEnv *, jobject, jint nCtx, jint nThreads) {
     if (!g_model) return JNI_FALSE;
     if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
+    g_cached_tokens.clear();
     llama_context_params p = llama_context_default_params();
     p.n_ctx = (uint32_t)nCtx;
     p.n_batch = 512;
@@ -139,6 +142,7 @@ Java_com_example_agentllm_LlamaNative_setThreads(JNIEnv *, jobject, jlong ctx, j
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_agentllm_LlamaNative_resetContext(JNIEnv *, jobject) {
     if (g_ctx) llama_memory_clear(llama_get_memory(g_ctx), true);
+    g_cached_tokens.clear();
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -153,6 +157,7 @@ Java_com_example_agentllm_LlamaNative_applyChatTemplate(JNIEnv * env, jobject, j
     in.use_jinja = true;
     in.enable_thinking = false;
     auto params = common_chat_templates_apply(g_tmpls.get(), in);
+    LOGI("Chat template applied, prompt length: %zu", params.prompt.size());
     return out(env, params.prompt);
 }
 
@@ -190,6 +195,22 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
         notifyStage(""); return out(env, "");
     }
 
+    size_t n_match = 0;
+    const size_t common = std::min(g_cached_tokens.size(), toks.size());
+    while (n_match < common && g_cached_tokens[n_match] == toks[n_match]) ++n_match;
+
+    if (n_match < g_cached_tokens.size()) {
+        llama_kv_cache_seq_rm(g_ctx, 0, (int32_t)n_match, -1);
+    }
+
+    size_t decode_from = n_match;
+    if (decode_from == toks.size() && !toks.empty()) {
+        decode_from = toks.size() - 1;
+        llama_kv_cache_seq_rm(g_ctx, 0, (int32_t)decode_from, -1);
+    }
+
+    g_cached_tokens = toks;
+
     jmethodID onToken = nullptr;
     if (callback) {
         jclass cls = env->GetObjectClass(callback);
@@ -205,7 +226,7 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
     llama_sampler * sampler = llama_sampler_chain_init(sp);
     if (!sampler) { notifyStage(""); return out(env, ""); }
     llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
-    llama_batch batch = llama_batch_get_one(toks.data(), toks.size());
+    llama_batch batch = llama_batch_get_one(toks.data() + decode_from, toks.size() - decode_from);
     std::string result;
     std::string utf8_pending;
 
@@ -295,4 +316,5 @@ Java_com_example_agentllm_LlamaNative_freeModel(JNIEnv *, jobject) {
     g_tmpls.reset();
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
     g_vocab = nullptr;
+    g_cached_tokens.clear();
 }
