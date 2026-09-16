@@ -69,6 +69,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streamingText.value = ""
         _reasoningText.value = ""
         _stage.value = "準備しています…"
+        val streamed = StringBuilder()
+
+        fun publishStream() {
+            val raw = streamed.toString()
+            val thinkStart = raw.indexOf("<think>")
+            val thinkEnd = raw.indexOf("</think>")
+            if (thinkStart >= 0 && thinkEnd > thinkStart) {
+                _reasoningText.value = raw.substring(thinkStart + 7, thinkEnd).trim()
+                val answerStart = thinkEnd + 8
+                val toolStart = raw.indexOf("<|tool_call_start|>", answerStart)
+                _streamingText.value = raw.substring(answerStart, if (toolStart >= 0) toolStart else raw.length).trim()
+            } else if (thinkStart < 0) {
+                _streamingText.value = raw
+            }
+        }
 
         runCatching {
             if (isNewConversation) {
@@ -77,8 +92,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             agent!!.run(
                 userText = text,
-                onToken = { token -> _streamingText.value += token },
-                onStage = { stage -> _stage.value = stage }
+                onToken = {
+                    streamed.append(it)
+                    publishStream()
+                },
+                onStage = { stage ->
+                    if (stage == "文章を読んでいます…") streamed.clear()
+                    _stage.value = stage
+                }
             )
         }.onSuccess { answer ->
             _messages.value = before + answer

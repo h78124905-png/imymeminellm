@@ -44,7 +44,9 @@ class LlamaEngine {
                                     put("type", "function")
                                     put("function", JSONObject().apply {
                                         put("name", c.name)
-                                        put("arguments", c.arguments)
+                                        // LFM2.5's chat template requires a mapping,
+                                        // not a JSON-encoded argument string.
+                                        put("arguments", JSONObject(c.arguments))
                                     })
                                 })
                             }
