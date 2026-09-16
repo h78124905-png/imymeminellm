@@ -29,12 +29,35 @@ class TinyFishClient(private val apiKey: String) {
 
     suspend fun search(query: String): String {
         val q = URLEncoder.encode(query, "UTF-8")
-        return request("https://api.search.tinyfish.ai?query=$q&location=JP&language=ja", "GET")
+        val response = JSONObject(request("https://api.search.tinyfish.ai?query=$q&location=JP&language=ja", "GET"))
+        val arr = response.optJSONArray("results") ?: JSONArray()
+        return buildString {
+            for (i in 0 until minOf(arr.length(), 3)) {
+                val r = arr.getJSONObject(i)
+                appendLine("[${i + 1}] ${r.optString("title")}")
+                appendLine("URL: ${r.optString("url")}")
+                appendLine("概要: ${r.optString("snippet").take(200)}")
+                appendLine()
+            }
+        }.trimEnd()
     }
 
     suspend fun fetch(urls: List<String>): String {
         require(urls.size <= 10)
-        val body = JSONObject().apply { put("urls", JSONArray(urls)); put("format", "markdown") }.toString()
-        return request("https://api.fetch.tinyfish.ai", "POST", body)
+        val body = JSONObject().apply {
+            put("urls", JSONArray(urls.take(3)))
+            put("format", "markdown")
+        }.toString()
+        val response = JSONObject(request("https://api.fetch.tinyfish.ai", "POST", body))
+        val arr = response.optJSONArray("results") ?: JSONArray()
+        return buildString {
+            for (i in 0 until minOf(arr.length(), 3)) {
+                val r = arr.getJSONObject(i)
+                appendLine("[${i + 1}] ${r.optString("title")}")
+                appendLine("URL: ${r.optString("url")}")
+                appendLine(r.optString("text").take(1500))
+                appendLine()
+            }
+        }.trimEnd()
     }
 }
