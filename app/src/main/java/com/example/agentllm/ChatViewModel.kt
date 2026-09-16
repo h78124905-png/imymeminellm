@@ -14,6 +14,7 @@ import java.io.File
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val engine = LlamaEngine()
     private var agent: AgentLoop? = null
+    private var isNewConversation = true
     private val keyStore = SecureKeyStore(app)
     private val prefs = app.getSharedPreferences("models", 0)
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -70,6 +71,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _stage.value = "準備しています…"
 
         runCatching {
+            if (isNewConversation) {
+                engine.reset()
+                isNewConversation = false
+            }
             agent!!.run(
                 userText = text,
                 onToken = { token -> _streamingText.value += token },
@@ -87,6 +92,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _loading.value = false
         _stage.value = ""
         _status.value = "準備完了"
+    }
+
+    fun startNewConversation() {
+        isNewConversation = true
+        _messages.value = emptyList()
+        _streamingText.value = ""
+        _reasoningText.value = ""
+        _stage.value = ""
     }
 
     override fun onCleared() { engine.close(); super.onCleared() }
