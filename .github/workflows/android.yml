@@ -16,7 +16,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -35,11 +35,16 @@ jobs:
           rm cmdtools.zip
           export PATH="$SDK_ROOT/cmdline-tools/latest/bin:$SDK_ROOT/platform-tools:$PATH"
           yes 2>/dev/null | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platform-tools" \
-                     "platforms;android-34" \
-                     "build-tools;34.0.0" \
-                     "ndk;26.1.10909125" \
-                     "cmake;3.22.1"
+          if ! sdkmanager "platform-tools" \
+                         "platforms;android-34" \
+                         "build-tools;34.0.0" \
+                         "ndk;26.1.10909125" \
+                         "cmake;3.24.1"; then
+            curl -sSL -o cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v3.24.1/cmake-3.24.1-linux-x86_64.tar.gz
+            tar xzf cmake.tar.gz -C /opt
+            echo "/opt/cmake-3.24.1-linux-x86_64/bin" >> "$GITHUB_PATH"
+            rm cmake.tar.gz
+          fi
           echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
@@ -53,11 +58,8 @@ jobs:
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
 
-      - name: Build release APK
-        run: gradle --no-daemon assembleRelease
-
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agentllm-apk
-          path: app/build/outputs/apk/**/*.apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
