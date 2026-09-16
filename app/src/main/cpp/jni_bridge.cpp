@@ -47,6 +47,66 @@ static std::string json_escape(const std::string & s) {
 
 static jstring out(JNIEnv * env, const std::string & s) { return env->NewStringUTF(s.c_str()); }
 
+// Return the number of leading bytes that form complete, valid UTF-8 code points.
+// llama_token_to_piece() can end in the middle of a multibyte character, so the
+// incomplete suffix stays buffered until a later token completes it.
+static size_t utf8_complete_prefix(const std::string & bytes) {
+    size_t i = 0;
+    while (i < bytes.size()) {
+        const unsigned char c = static_cast<unsigned char>(bytes[i]);
+        size_t need = 0;
+        uint32_t cp = 0;
+        if (c <= 0x7f) {
+            need = 1;
+            cp = c;
+        } else if (c >= 0xc2 && c <= 0xdf) {
+            need = 2;
+            cp = c & 0x1f;
+        } else if (c >= 0xe0 && c <= 0xef) {
+            need = 3;
+            cp = c & 0x0f;
+        } else if (c >= 0xf0 && c <= 0xf4) {
+            need = 4;
+            cp = c & 0x07;
+        } else {
+            // Invalid UTF-8 byte. Do not let it block the stream forever.
+            ++i;
+            continue;
+        }
+
+        if (i + need > bytes.size()) break;
+        bool valid = true;
+        for (size_t j = 1; j < need; ++j) {
+            const unsigned char cc = static_cast<unsigned char>(bytes[i + j]);
+            if ((cc & 0xc0) != 0x80) {
+                valid = false;
+                break;
+            }
+            cp = (cp << 6) | (cc & 0x3f);
+        }
+        if (!valid || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ||
+            (need == 3 && cp < 0x800) || (need == 4 && cp < 0x10000)) {
+            ++i;
+            continue;
+        }
+        i += need;
+    }
+    return i;
+}
+
+static void emit_utf8(JNIEnv * env, jobject callback, jmethodID onToken, const std::string & bytes) {
+    if (!callback || !onToken || bytes.empty()) return;
+    jbyteArray arr = env->NewByteArray(static_cast<jsize>(bytes.size()));
+    if (!arr) return;
+    env->SetByteArrayRegion(arr, 0, static_cast<jsize>(bytes.size()), reinterpret_cast<const jbyte *>(bytes.data()));
+    env->CallVoidMethod(callback, onToken, arr);
+    env->DeleteLocalRef(arr);
+    if (env->ExceptionCheck()) {
+        LOGE("Token callback threw an exception");
+        env->ExceptionClear();
+    }
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_agentllm_LlamaNative_initBackend(JNIEnv *, jobject) {
     ggml_backend_load_all();
@@ -117,7 +177,7 @@ Java_com_example_agentllm_LlamaNative_applyChatTemplate(JNIEnv * env, jobject, j
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring prompt, jint maxTokens) {
+Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring prompt, jint maxTokens, jobject callback) {
     if (!g_ctx || !g_vocab) return out(env, "");
     const std::string p = jstr(env, prompt);
     int n = -llama_tokenize(g_vocab, p.c_str(), p.size(), nullptr, 0, true, true);
@@ -125,21 +185,70 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
     std::vector<llama_token> toks(n);
     if (llama_tokenize(g_vocab, p.c_str(), p.size(), toks.data(), toks.size(), true, true) < 0) return out(env, "");
 
+    jmethodID onToken = nullptr;
+    if (callback) {
+        jclass cls = env->GetObjectClass(callback);
+        if (cls) {
+            onToken = env->GetMethodID(cls, "onToken", "([B)V");
+            env->DeleteLocalRef(cls);
+            if (env->ExceptionCheck()) {
+                LOGE("TokenCallback.onToken was not found");
+                env->ExceptionClear();
+                onToken = nullptr;
+            }
+        }
+    }
+
     llama_sampler_chain_params sp = llama_sampler_chain_default_params();
     sp.no_perf = true;
     llama_sampler * sampler = llama_sampler_chain_init(sp);
+    if (!sampler) return out(env, "");
     llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
     llama_batch batch = llama_batch_get_one(toks.data(), toks.size());
     std::string result;
+    std::string utf8_pending;
 
     for (int i = 0; i < maxTokens; ++i) {
         if (llama_decode(g_ctx, batch) != 0) break;
         llama_token id = llama_sampler_sample(sampler, g_ctx, -1);
+        llama_sampler_accept(sampler, id);
         if (llama_vocab_is_eog(g_vocab, id)) break;
+
         char buf[4096];
         int len = llama_token_to_piece(g_vocab, id, buf, sizeof(buf), 0, true);
-        if (len > 0) result.append(buf, len);
+        if (len < 0) {
+            std::vector<char> big(static_cast<size_t>(-len));
+            len = llama_token_to_piece(g_vocab, id, big.data(), big.size(), 0, true);
+            if (len > 0) {
+                const std::string piece(big.data(), static_cast<size_t>(len));
+                result += piece;
+                if (onToken) {
+                    utf8_pending += piece;
+                    const size_t complete = utf8_complete_prefix(utf8_pending);
+                    if (complete > 0) {
+                        emit_utf8(env, callback, onToken, utf8_pending.substr(0, complete));
+                        utf8_pending.erase(0, complete);
+                    }
+                }
+            }
+        } else if (len > 0) {
+            const std::string piece(buf, static_cast<size_t>(len));
+            result += piece;
+            if (onToken) {
+                utf8_pending += piece;
+                const size_t complete = utf8_complete_prefix(utf8_pending);
+                if (complete > 0) {
+                    emit_utf8(env, callback, onToken, utf8_pending.substr(0, complete));
+                    utf8_pending.erase(0, complete);
+                }
+            }
+        }
         batch = llama_batch_get_one(&id, 1);
+    }
+
+    if (onToken && !utf8_pending.empty()) {
+        // Flush only a final incomplete/invalid suffix rather than dropping model output.
+        emit_utf8(env, callback, onToken, utf8_pending);
     }
     llama_sampler_free(sampler);
     return out(env, result);
