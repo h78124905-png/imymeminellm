@@ -8,6 +8,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -23,8 +25,12 @@ private fun AgentApp(vm: ChatViewModel = viewModel()) {
     val messages by vm.messages.collectAsState()
     val status by vm.status.collectAsState()
     val recent by vm.recent.collectAsState()
+    val streamingText by vm.streamingText.collectAsState()
+    val reasoningText by vm.reasoningText.collectAsState()
+    val loading by vm.loading.collectAsState()
     var input by remember { mutableStateOf("") }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.onModelUri(uri) }
+
     MaterialTheme(colorScheme = darkColorScheme()) {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -41,14 +47,48 @@ private fun AgentApp(vm: ChatViewModel = viewModel()) {
                     items(messages) { m ->
                         Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
                             Text(if (m.role == "user") "あなた" else "AI", style = MaterialTheme.typography.labelSmall)
+                            if (m.reasoning.isNotBlank()) {
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(Modifier.padding(12.dp)) {
+                                        Text("考えたこと", style = MaterialTheme.typography.labelMedium)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            m.reasoning,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(8.dp))
+                            }
                             Text(m.content)
+                        }
+                    }
+                    if (loading && streamingText.isNotBlank()) {
+                        item {
+                            Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+                                Text("AI", style = MaterialTheme.typography.labelSmall)
+                                Text(streamingText)
+                            }
                         }
                     }
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("メッセージ") })
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("メッセージ") },
+                        enabled = !loading
+                    )
                     Spacer(Modifier.width(8.dp))
-                    Button(onClick = { vm.send(input); input = "" }, enabled = input.isNotBlank()) { Text("送信") }
+                    Button(
+                        onClick = { vm.send(input); input = "" },
+                        enabled = input.isNotBlank() && !loading
+                    ) { Text("送信") }
                 }
             }
         }
