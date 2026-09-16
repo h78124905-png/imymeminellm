@@ -103,7 +103,7 @@ Java_com_example_agentllm_LlamaNative_loadModel(JNIEnv * env, jobject, jstring p
     const std::string model_path = jstr(env, path);
     llama_model_params p = llama_model_default_params();
     p.n_gpu_layers = 0;
-    p.use_mmap = false;
+    p.use_mmap = true;
     g_model = llama_model_load_from_file(model_path.c_str(), p);
     if (!g_model) { LOGE("model load failed"); return JNI_FALSE; }
     g_vocab = llama_model_get_vocab(g_model);
@@ -237,20 +237,16 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
     if (n_diff > 0) {
         llama_batch batch = llama_batch_init(n_diff, 0, 1);
         for (int i = 0; i < n_diff; ++i) {
-            batch.token[i] = toks[decode_from + i];
-            batch.pos[i] = (llama_pos)(decode_from + i);
-            batch.n_seq_id[i] = 1;
+            batch.token[i]     = toks[decode_from + i];
+            batch.pos[i]       = (llama_pos)(decode_from + i);
+            batch.n_seq_id[i]  = 1;
             batch.seq_id[i][0] = 0;
-            batch.logits[i] = (i == n_diff - 1);
+            batch.logits[i]    = (i == n_diff - 1);
         }
         batch.n_tokens = n_diff;
 
         if (llama_decode(g_ctx, batch) != 0) {
             LOGE("Differential prefill failed");
-            llama_batch_free(batch);
-            llama_sampler_free(sampler);
-            notifyStage("");
-            return out(env, "");
         }
         llama_batch_free(batch);
     }
