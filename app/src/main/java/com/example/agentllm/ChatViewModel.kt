@@ -26,6 +26,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val streamingText: StateFlow<String> = _streamingText
     private val _reasoningText = MutableStateFlow("")
     val reasoningText: StateFlow<String> = _reasoningText
+    private val _stage = MutableStateFlow("")
+    val stage: StateFlow<String> = _stage
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading
 
@@ -65,13 +67,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _loading.value = true
         _streamingText.value = ""
         _reasoningText.value = ""
-        _status.value = "答えを考えています…"
+        _stage.value = "準備しています…"
 
         runCatching {
             agent!!.run(
                 userText = text,
-                onStage = { stage -> _status.value = stage },
-                onToken = { token -> _streamingText.value += token }
+                onToken = { token -> _streamingText.value += token },
+                onStage = { stage -> _stage.value = stage }
             )
         }.onSuccess { answer ->
             _messages.value = before + answer
@@ -83,6 +85,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _reasoningText.value = ""
         }
         _loading.value = false
+        _stage.value = ""
         _status.value = "準備完了"
     }
 
