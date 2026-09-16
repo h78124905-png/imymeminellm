@@ -209,8 +209,6 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
         llama_memory_seq_rm(llama_get_memory(g_ctx), 0, (llama_pos)decode_from, -1);
     }
 
-    g_cached_tokens = toks;
-
     LOGI("Differential prefill: n_match=%zu, decode_from=%zu, n_diff=%d",
          n_match, decode_from, (int)(toks.size() - decode_from));
 
@@ -234,22 +232,34 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
     llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
 
     int n_diff = (int)(toks.size() - decode_from);
-    if (n_diff > 0) {
-        llama_batch batch = llama_batch_init(n_diff, 0, 1);
-        for (int i = 0; i < n_diff; ++i) {
-            batch.token[i]     = toks[decode_from + i];
-            batch.pos[i]       = (llama_pos)(decode_from + i);
+    constexpr int32_t kPrefillBatch = 512;
+    for (int offset = 0; offset < n_diff; offset += kPrefillBatch) {
+        const int count = std::min(kPrefillBatch, n_diff - offset);
+        llama_batch batch = llama_batch_init(count, 0, 1);
+        for (int i = 0; i < count; ++i) {
+            const int token_index = offset + i;
+            batch.token[i]     = toks[decode_from + token_index];
+            batch.pos[i]       = (llama_pos)(decode_from + token_index);
             batch.n_seq_id[i]  = 1;
             batch.seq_id[i][0] = 0;
-            batch.logits[i]    = (i == n_diff - 1);
+            batch.logits[i]    = (offset + i == n_diff - 1);
         }
-        batch.n_tokens = n_diff;
+        batch.n_tokens = count;
 
-        if (llama_decode(g_ctx, batch) != 0) {
-            LOGE("Differential prefill failed");
-        }
+        const int decode_result = llama_decode(g_ctx, batch);
         llama_batch_free(batch);
+        if (decode_result != 0) {
+            LOGE("Differential prefill failed: offset=%d count=%d n_diff=%d",
+                 offset, count, n_diff);
+            llama_sampler_free(sampler);
+            notifyStage("");
+            return out(env, "");
+        }
     }
+
+    // Only publish the token cache after the complete prefill succeeded.
+    // Keeping a partially decoded prompt here makes the next request fail silently.
+    g_cached_tokens = toks;
 
     notifyStage("writing");
     llama_set_n_threads(g_ctx, 3, 3);
