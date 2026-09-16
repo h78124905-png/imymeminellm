@@ -20,7 +20,8 @@ class LlamaEngine {
         messages: List<ChatMessage>,
         tools: JSONArray,
         maxTokens: Int = 512,
-        onToken: (String) -> Unit = {}
+        onToken: (String) -> Unit = {},
+        onStage: (String) -> Unit = {}
     ): ChatMessage = withContext(Dispatchers.Default) {
         check(loaded) { "model is not loaded" }
         LlamaNative.resetContext()
@@ -51,12 +52,17 @@ class LlamaEngine {
         }
 
         val prompt = LlamaNative.applyChatTemplate(messageJson.toString(), tools.toString())
-        val callback = object : LlamaNative.TokenCallback {
+        val tokenCb = object : LlamaNative.TokenCallback {
             override fun onToken(token: ByteArray) {
                 onToken(String(token, Charsets.UTF_8))
             }
         }
-        val raw = LlamaNative.generate(prompt, maxTokens, callback)
+        val stageCb = object : LlamaNative.StageCallback {
+            override fun onStage(stage: String) {
+                onStage(stage)
+            }
+        }
+        val raw = LlamaNative.generate(prompt, maxTokens, tokenCb, stageCb)
         val parsed = JSONObject(LlamaNative.parseToolCalls(raw))
         val calls = mutableListOf<ToolCall>()
         val arr = parsed.optJSONArray("toolCalls") ?: parsed.optJSONArray("tool_calls") ?: JSONArray()
