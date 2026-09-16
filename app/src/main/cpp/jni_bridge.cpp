@@ -200,13 +200,13 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
     while (n_match < common && g_cached_tokens[n_match] == toks[n_match]) ++n_match;
 
     if (n_match < g_cached_tokens.size()) {
-        llama_kv_cache_seq_rm(g_ctx, 0, (int32_t)n_match, -1);
+        llama_memory_seq_rm(llama_get_memory(g_ctx), 0, (llama_pos)n_match, -1);
     }
 
     size_t decode_from = n_match;
     if (decode_from == toks.size() && !toks.empty()) {
         decode_from = toks.size() - 1;
-        llama_kv_cache_seq_rm(g_ctx, 0, (int32_t)decode_from, -1);
+        llama_memory_seq_rm(llama_get_memory(g_ctx), 0, (llama_pos)decode_from, -1);
     }
 
     g_cached_tokens = toks;
@@ -223,6 +223,9 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
             if (env->ExceptionCheck()) { env->ExceptionClear(); onToken = nullptr; }
         }
     }
+
+    std::string result;
+    std::string utf8_pending;
 
     llama_sampler_chain_params sp = llama_sampler_chain_default_params();
     sp.no_perf = true;
@@ -289,7 +292,7 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
                 }
             }
         }
-        batch = llama_batch_get_one(&id, 1);
+        llama_batch batch = llama_batch_get_one(&id, 1);
         if (llama_decode(g_ctx, batch) != 0) break;
     }
 
