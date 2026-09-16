@@ -97,6 +97,12 @@ static std::string parse_lfm25_python_tool_calls(const std::string & generated) 
     return first ? std::string() : calls.str();
 }
 
+static std::string parse_lfm25_reasoning(const std::string & generated) {
+    static const std::regex think_re(R"(<think>([\s\S]*?)</think>)", std::regex::ECMAScript);
+    std::smatch match;
+    return std::regex_search(generated, match, think_re) ? match[1].str() : std::string();
+}
+
 static size_t utf8_complete_prefix(const std::string & bytes) {
     size_t i = 0;
     while (i < bytes.size()) {
@@ -367,9 +373,10 @@ Java_com_example_agentllm_LlamaNative_parseToolCalls(JNIEnv * env, jobject, jstr
         const std::string raw = jstr(env, generated);
         const std::string fallback = parse_lfm25_python_tool_calls(raw);
         if (!fallback.empty()) {
+            const std::string reasoning = parse_lfm25_reasoning(raw);
             std::ostringstream fallback_json;
-            fallback_json << "{\"content\":\"\",\"reasoning\":\"\",\"toolCalls\":"
-                          << fallback << '}';
+            fallback_json << "{\"content\":\"\",\"reasoning\":\""
+                          << json_escape(reasoning) << "\",\"toolCalls\":" << fallback << '}';
             LOGI("Parsed LFM2.5 Python-style tool call");
             return out(env, fallback_json.str());
         }
@@ -378,8 +385,11 @@ Java_com_example_agentllm_LlamaNative_parseToolCalls(JNIEnv * env, jobject, jstr
         if (msg.tool_calls.empty()) {
             LOGI("No tool call parsed from generated output");
         }
+        const std::string reasoning = msg.reasoning_content.empty()
+            ? parse_lfm25_reasoning(raw)
+            : msg.reasoning_content;
         std::ostringstream o;
-        o << "{\"content\":\"" << json_escape(msg.content) << "\",\"reasoning\":\"" << json_escape(msg.reasoning_content) << "\",\"toolCalls\":[";
+        o << "{\"content\":\"" << json_escape(msg.content) << "\",\"reasoning\":\"" << json_escape(reasoning) << "\",\"toolCalls\":[";
         for (size_t i = 0; i < msg.tool_calls.size(); ++i) {
             if (i) o << ',';
             const auto & c = msg.tool_calls[i];
