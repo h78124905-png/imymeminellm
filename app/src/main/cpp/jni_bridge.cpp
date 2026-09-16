@@ -211,6 +211,9 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
 
     g_cached_tokens = toks;
 
+    LOGI("Differential prefill: n_match=%zu, decode_from=%zu, n_diff=%d",
+         n_match, decode_from, (int)(toks.size() - decode_from));
+
     jmethodID onToken = nullptr;
     if (callback) {
         jclass cls = env->GetObjectClass(callback);
@@ -226,15 +229,29 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
     llama_sampler * sampler = llama_sampler_chain_init(sp);
     if (!sampler) { notifyStage(""); return out(env, ""); }
     llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
-    llama_batch batch = llama_batch_get_one(toks.data() + decode_from, toks.size() - decode_from);
-    std::string result;
-    std::string utf8_pending;
 
-    if (llama_decode(g_ctx, batch) != 0) {
-        llama_sampler_free(sampler);
-        notifyStage("");
-        return out(env, "");
+    int n_diff = (int)(toks.size() - decode_from);
+    if (n_diff > 0) {
+        llama_batch batch = llama_batch_init(n_diff, 0, 1);
+        for (int i = 0; i < n_diff; ++i) {
+            batch.token[i] = toks[decode_from + i];
+            batch.pos[i] = (llama_pos)(decode_from + i);
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = (i == n_diff - 1);
+        }
+        batch.n_tokens = n_diff;
+
+        if (llama_decode(g_ctx, batch) != 0) {
+            LOGE("Differential prefill failed");
+            llama_batch_free(batch);
+            llama_sampler_free(sampler);
+            notifyStage("");
+            return out(env, "");
+        }
+        llama_batch_free(batch);
     }
+
     notifyStage("writing");
     llama_set_n_threads(g_ctx, 3, 3);
 
