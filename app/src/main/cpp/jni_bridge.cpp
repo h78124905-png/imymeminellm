@@ -101,7 +101,7 @@ Java_com_example_agentllm_LlamaNative_loadModel(JNIEnv * env, jobject, jstring p
     const std::string model_path = jstr(env, path);
     llama_model_params p = llama_model_default_params();
     p.n_gpu_layers = 0;
-    p.use_mmap = true;
+    p.use_mmap = false;
     g_model = llama_model_load_from_file(model_path.c_str(), p);
     if (!g_model) { LOGE("model load failed"); return JNI_FALSE; }
     g_vocab = llama_model_get_vocab(g_model);
@@ -128,6 +128,12 @@ Java_com_example_agentllm_LlamaNative_createContext(JNIEnv *, jobject, jint nCtx
     if (!g_ctx) return JNI_FALSE;
     LOGI("context created n_ctx=%d threads=%d", nCtx, nThreads);
     return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_agentllm_LlamaNative_setThreads(JNIEnv *, jobject, jlong ctx, jint nThreads, jint nThreadsBatch) {
+    llama_context * target = ctx != 0 ? reinterpret_cast<llama_context *>(ctx) : g_ctx;
+    if (target) llama_set_n_threads(target, nThreads, nThreadsBatch);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -209,6 +215,7 @@ Java_com_example_agentllm_LlamaNative_generate(JNIEnv * env, jobject, jstring pr
         return out(env, "");
     }
     notifyStage("writing");
+    llama_set_n_threads(g_ctx, 3, 3);
 
     for (int i = 0; i < maxTokens; ++i) {
         llama_token id = llama_sampler_sample(sampler, g_ctx, -1);
